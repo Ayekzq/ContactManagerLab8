@@ -172,16 +172,30 @@ jobs:
     needs: build-and-prerelease
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    permissions:
+      contents: write
+
     environment:
       name: production
       url: ${{ needs.build-and-prerelease.outputs.release_url }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Promote pre-release to stable release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest
-          echo "Published $GITHUB_REF_NAME as a stable GitHub Release."
+          gh release edit "$RELEASE_TAG" \
+            --repo "$REPOSITORY" \
+            --prerelease=false \
+            --latest
+          echo "Published $RELEASE_TAG as a stable GitHub Release."
