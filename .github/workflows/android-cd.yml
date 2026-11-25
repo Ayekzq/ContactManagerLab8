@@ -1,0 +1,187 @@
+name: Android CD
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_ID: com.example.contactmanager
+  KEYSTORE_FILE: contactmanager-release.p12
+
+jobs:
+  build-and-prerelease:
+    name: Build signed APK/AAB and create GitHub pre-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version_name: ${{ steps.app-version.outputs.version_name }}
+      version_code: ${{ steps.app-version.outputs.version_code }}
+      release_url: ${{ steps.create-release.outputs.release_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK 35
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+          validate-wrappers: false
+
+      - name: Restore release keystore and signing properties
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo "Missing ANDROID_KEYSTORE_BASE64 secret"; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "Missing ANDROID_KEYSTORE_PASSWORD secret"; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo "Missing ANDROID_KEY_ALIAS secret"; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo "Missing ANDROID_KEY_PASSWORD secret"; exit 1; }
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+
+          cat > keystore.properties <<EOF_PROPERTIES
+          storeFile=$KEYSTORE_FILE
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF_PROPERTIES
+          chmod 600 keystore.properties
+
+          keytool -list -storetype PKCS12 \
+            -keystore "$KEYSTORE_FILE" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
+          echo "Release keystore restored and alias verified."
+
+      - name: Verify Git tag matches Android version
+        id: app-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NAME=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' app/build.gradle.kts | head -n 1)
+          VERSION_CODE=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*$/\1/p' app/build.gradle.kts | head -n 1)
+          test -n "$VERSION_NAME" || { echo "Could not read versionName from app/build.gradle.kts"; exit 1; }
+          test -n "$VERSION_CODE" || { echo "Could not read versionCode from app/build.gradle.kts"; exit 1; }
+
+          EXPECTED_TAG="v${VERSION_NAME}"
+          if [[ "$GITHUB_REF_NAME" != "$EXPECTED_TAG" ]]; then
+            echo "Git tag ($GITHUB_REF_NAME) must match versionName ($EXPECTED_TAG)."
+            exit 1
+          fi
+
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION_NAME (versionCode $VERSION_CODE)"
+
+      - name: Run release build and create signed APK/AAB
+        run: gradle --no-daemon :app:assembleRelease :app:bundleRelease
+
+      - name: Verify APK and AAB signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          AAB="app/build/outputs/bundle/release/app-release.aab"
+          test -s "$APK"
+          test -s "$AAB"
+
+          BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$BUILD_TOOLS_DIR/apksigner" verify --verbose "$APK"
+          jarsigner -verify "$AAB"
+
+      - name: Upload signed APK and AAB as workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ContactManager-release-${{ github.ref_name }}
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub pre-release with APK and AAB
+        id: create-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: ${{ steps.app-version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.app-version.outputs.version_code }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF_NOTES
+          ## ContactManager ${VERSION_NAME}
+
+          Automated pre-release build for testing.
+
+          - Android package: \`${APP_ID}\`
+          - versionCode: \`${VERSION_CODE}\`
+          - Signed APK: \`app-release.apk\` (direct installation)
+          - Signed AAB: \`app-release.aab\` (Android App Bundle archive)
+
+          This is a GitHub pre-release for testing. After review, the same GitHub Release can be promoted to a stable release.
+          EOF_NOTES
+
+          gh release create "$GITHUB_REF_NAME" \
+            app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/bundle/release/app-release.aab \
+            --verify-tag \
+            --title "ContactManager ${VERSION_NAME}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --prerelease \
+            --latest=false
+
+          RELEASE_URL=$(gh release view "$GITHUB_REF_NAME" --json url --jq '.url')
+          echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
+          echo "Created GitHub pre-release: $RELEASE_URL"
+
+      - name: Remove signing materials
+        if: always()
+        shell: bash
+        run: rm -f "$KEYSTORE_FILE" keystore.properties
+
+  publish-stable:
+    name: Publish stable GitHub Release after approval
+    needs: build-and-prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: ${{ needs.build-and-prerelease.outputs.release_url }}
+
+    steps:
+      - name: Promote pre-release to stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest
+          echo "Published $GITHUB_REF_NAME as a stable GitHub Release."
