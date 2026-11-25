@@ -8,3 +8,23 @@ local.properties
 Thumbs.db
 *.jks
 *.keystore
+*.p12
+keystore.properties
+# Локальные настройки
+local.properties
+keystore.properties
+
+# Хранилища ключей
+*.p12
+*.jks
+*.keystore
+
+# Результаты сборки
+**/build/
+artifacts/
+*.apk
+*.aab
+
+# Среда разработки
+.idea/
+.gradle/
