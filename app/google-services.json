@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "31881833715",
+    "project_id": "contactmanager-play-publisher",
+    "storage_bucket": "contactmanager-play-publisher.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:31881833715:android:4d24cd955680ea9a889b86",
+        "android_client_info": {
+          "package_name": "com.example.contactmanager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCW8D_77NXq3Mfe553zF7TFD5CIF1s-0s4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
