@@ -153,6 +153,15 @@ class MainActivity : Activity() {
                 }
                 firebaseAnalytics.logEvent("contacts_sort_changed", parameters)
                 renderContacts()
+                if (packageName == "com.example.contactmanager") {
+                    FirebaseCrashlytics.getInstance().log(
+                        "Critical bug simulation in ContactManager 1.2.0"
+                    )
+
+                    throw IllegalStateException(
+                        "Critical bug simulation in ContactManager 1.2.0"
+                    )
+                }
             }
         }
         page.addView(sortButton, matchWidth())
