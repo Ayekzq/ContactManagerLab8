@@ -21,6 +21,8 @@ import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import com.google.firebase.analytics.FirebaseAnalytics
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 
 private data class Contact(
     val id: String,
@@ -30,6 +32,7 @@ private data class Contact(
 )
 
 class MainActivity : Activity() {
+    private lateinit var firebaseAnalytics: FirebaseAnalytics
 
     private val preferencesName = "contact_manager_storage"
     private val contactsKey = "contacts_json"
@@ -39,6 +42,9 @@ class MainActivity : Activity() {
     private lateinit var searchInput: EditText
     private lateinit var countLabel: TextView
 
+    // The contact list is displayed in ascending order by default.
+    private var sortAscending = true
+
     private val pageColor = Color.rgb(244, 246, 251)
     private val primaryColor = Color.rgb(54, 89, 217)
     private val textColor = Color.rgb(28, 35, 53)
@@ -46,6 +52,9 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        firebaseAnalytics = FirebaseAnalytics.getInstance(this)
+        FirebaseCrashlytics.getInstance().log("ContactManager main screen opened")
         window.statusBarColor = pageColor
         window.navigationBarColor = Color.WHITE
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -95,8 +104,21 @@ class MainActivity : Activity() {
         }
         page.addView(addButton, matchWidth())
 
+        // Temporary Crashlytics test control. It is visible only in debuggable builds.
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            val crashButton = Button(this).apply {
+                text = "Test Crash"
+                isAllCaps = false
+                setOnClickListener {
+                    FirebaseCrashlytics.getInstance().log("Manual Crashlytics test triggered")
+                    throw RuntimeException("ContactManager test crash")
+                }
+            }
+            page.addView(crashButton, matchWidth())
+        }
+
         searchInput = EditText(this).apply {
-            hint = "Поиск по имени или телефону"
+            hint = "Поиск по имени, телефону или email"
             textSize = 14f
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT
@@ -112,12 +134,31 @@ class MainActivity : Activity() {
         }
         val searchParams = matchWidth().apply {
             topMargin = dp(18)
-            bottomMargin = dp(18)
+            bottomMargin = dp(8)
         }
         page.addView(searchInput, searchParams)
 
+        val sortButton = Button(this).apply {
+            text = sortButtonLabel()
+            textSize = 12f
+            isAllCaps = false
+            setTextColor(primaryColor)
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(235, 239, 255))
+            setOnClickListener {
+                sortAscending = !sortAscending
+                text = sortButtonLabel()
+
+                val parameters = Bundle().apply {
+                    putString("sort_order", if (sortAscending) "ascending" else "descending")
+                }
+                firebaseAnalytics.logEvent("contacts_sort_changed", parameters)
+                renderContacts()
+            }
+        }
+        page.addView(sortButton, matchWidth())
+
         countLabel = textView("Контакты", 13f, secondaryColor, true).apply {
-            setPadding(0, 0, 0, dp(10))
+            setPadding(0, dp(12), 0, dp(10))
         }
         page.addView(countLabel)
 
@@ -140,20 +181,25 @@ class MainActivity : Activity() {
         setContentView(scrollView)
     }
 
+    private fun sortButtonLabel(): String {
+        return if (sortAscending) "Сортировка: А–Я" else "Сортировка: Я–А"
+    }
+
     private fun renderContacts() {
         if (!::contactsContainer.isInitialized) return
         contactsContainer.removeAllViews()
 
         val query = if (::searchInput.isInitialized) searchInput.text.toString().trim() else ""
-        val filtered = contacts.filter {
-            it.name.contains(query, ignoreCase = true) ||
-                it.phone.contains(query, ignoreCase = true) ||
-                it.email.contains(query, ignoreCase = true)
+        val filtered = contacts.filter { contact -> matchesContactSearch(contact, query) }
+        val sortedContacts = filtered.sortedWith { first, second ->
+            first.name.compareTo(second.name, ignoreCase = true)
+        }.let { sorted ->
+            if (sortAscending) sorted else sorted.reversed()
         }
 
-        countLabel.text = "Контакты: ${filtered.size}"
+        countLabel.text = "Контакты: ${sortedContacts.size}"
 
-        if (filtered.isEmpty()) {
+        if (sortedContacts.isEmpty()) {
             val emptyPanel = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -181,11 +227,25 @@ class MainActivity : Activity() {
             return
         }
 
-        filtered.forEach { contact ->
+        sortedContacts.forEach { contact ->
             contactsContainer.addView(createContactCard(contact), matchWidth().apply {
                 bottomMargin = dp(12)
             })
         }
+    }
+
+    /** Searches name/email normally and phone numbers by digits only. */
+    private fun matchesContactSearch(contact: Contact, query: String): Boolean {
+        if (query.isBlank()) return true
+
+        val textMatches = contact.name.contains(query, ignoreCase = true) ||
+            contact.email.contains(query, ignoreCase = true)
+
+        val queryDigits = query.filter { it.isDigit() }
+        val phoneDigits = contact.phone.filter { it.isDigit() }
+        val phoneMatches = queryDigits.isNotEmpty() && phoneDigits.contains(queryDigits)
+
+        return textMatches || phoneMatches
     }
 
     private fun createContactCard(contact: Contact): View {
@@ -281,10 +341,14 @@ class MainActivity : Activity() {
 
                 if (contact == null) {
                     contacts.add(Contact(UUID.randomUUID().toString(), name, phone, email))
+                    firebaseAnalytics.logEvent("contact_created", Bundle())
                     Toast.makeText(this, "Контакт добавлен", Toast.LENGTH_SHORT).show()
                 } else {
                     val index = contacts.indexOfFirst { it.id == contact.id }
-                    if (index >= 0) contacts[index] = contact.copy(name = name, phone = phone, email = email)
+                    if (index >= 0) {
+                        contacts[index] = contact.copy(name = name, phone = phone, email = email)
+                        firebaseAnalytics.logEvent("contact_updated", Bundle())
+                    }
                     Toast.makeText(this, "Изменения сохранены", Toast.LENGTH_SHORT).show()
                 }
                 saveContacts()
@@ -302,6 +366,7 @@ class MainActivity : Activity() {
             .setNegativeButton("Отмена", null)
             .setPositiveButton("Удалить") { _, _ ->
                 contacts.removeAll { it.id == contact.id }
+                firebaseAnalytics.logEvent("contact_deleted", Bundle())
                 saveContacts()
                 renderContacts()
                 Toast.makeText(this, "Контакт удалён", Toast.LENGTH_SHORT).show()

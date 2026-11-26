@@ -2,6 +2,8 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 
 }
 val keystorePropertiesFile =
@@ -33,8 +35,8 @@ android {
         minSdk = 23
         targetSdk = 35
 
-        versionCode = 4
-        versionName = "1.0.2"
+        versionCode = 5
+        versionName = "1.1.0"
     }
 
     buildFeatures {
@@ -124,4 +126,12 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    // Firebase BoM
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+
+// Firebase Crashlytics
+    implementation("com.google.firebase:firebase-crashlytics")
+
+// Firebase Analytics
+    implementation("com.google.firebase:firebase-analytics")
 }
