@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ContactManager repository
+    url: https://github.com/Ayekzq/ContactManagerLab8
+    about: Посмотрите README и существующие обращения перед созданием нового Issue.
